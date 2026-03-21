@@ -12,7 +12,7 @@
 
 services:
   sub2api:
-    image: msgaxzzz/sub2api:latest
+    image: msgaxzzz/sub2api-fork:latest
     container_name: sub2api
     restart: unless-stopped
     ulimits:
