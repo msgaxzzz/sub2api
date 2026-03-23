@@ -1636,6 +1636,19 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 	return isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody)
 }
 
+func shouldRetryOpenAIPoolModeOnSameAccount(account *Account, statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if account == nil || !account.IsPoolMode() {
+		return false
+	}
+
+	if statusCode == http.StatusUnauthorized &&
+		isPermanent401AuthFailure(extractUpstreamErrorCode(upstreamBody), sanitizeUpstreamErrorMessage(strings.TrimSpace(upstreamMsg))) {
+		return false
+	}
+
+	return isPoolModeRetryableStatus(statusCode) || isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody)
+}
+
 func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
@@ -2225,7 +2238,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
-					RetryableOnSameAccount: account.IsPoolMode() && (isPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+					RetryableOnSameAccount: shouldRetryOpenAIPoolModeOnSameAccount(account, resp.StatusCode, upstreamMsg, respBody),
 				}
 			}
 			return s.handleErrorResponse(ctx, resp, c, account, body)
@@ -3064,7 +3077,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,
-			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+			RetryableOnSameAccount: shouldRetryOpenAIPoolModeOnSameAccount(account, resp.StatusCode, upstreamMsg, body),
 		}
 	}
 
@@ -3201,7 +3214,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,
-			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+			RetryableOnSameAccount: shouldRetryOpenAIPoolModeOnSameAccount(account, resp.StatusCode, upstreamMsg, body),
 		}
 	}
 

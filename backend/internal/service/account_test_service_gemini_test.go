@@ -4,6 +4,8 @@ package service
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -93,4 +95,47 @@ func TestShouldForceGeminiCodeAssistStream(t *testing.T) {
 	require.True(t, shouldForceGeminiCodeAssistStream("gemini-2.5-pro"))
 	require.False(t, shouldForceGeminiCodeAssistStream("gemini-2.5-flash-image"))
 	require.False(t, shouldForceGeminiCodeAssistStream("gemini-3.1-flash-image-preview"))
+}
+
+func TestGeminiImagePreviewFallbackModel(t *testing.T) {
+	t.Parallel()
+
+	modelID, ok := geminiImagePreviewFallbackModel("gemini-2.5-flash-image")
+	require.True(t, ok)
+	require.Equal(t, "gemini-2.5-flash-image-preview", modelID)
+
+	modelID, ok = geminiImagePreviewFallbackModel("gemini-3.1-flash-image")
+	require.True(t, ok)
+	require.Equal(t, "gemini-3.1-flash-image-preview", modelID)
+
+	_, ok = geminiImagePreviewFallbackModel("gemini-2.5-flash")
+	require.False(t, ok)
+}
+
+func TestTestGeminiAccountConnection_CodeAssistImageModelFailsFast(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	ctx, recorder := newSoraTestContext()
+	req := httptest.NewRequest(http.MethodPost, "/test", nil)
+	ctx.Request = req
+
+	svc := &AccountTestService{}
+	account := &Account{
+		ID:       1,
+		Platform: PlatformGemini,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"project_id":    "project-1",
+			"access_token":  "token",
+			"refresh_token": "refresh",
+		},
+	}
+
+	err := svc.testGeminiAccountConnection(ctx, account, "gemini-2.5-flash-image", "draw a tiny robot")
+	require.NoError(t, err)
+
+	body := recorder.Body.String()
+	require.Contains(t, body, "Gemini OAuth mode: Code Assist")
+	require.Contains(t, body, "do not support native image model tests here")
 }

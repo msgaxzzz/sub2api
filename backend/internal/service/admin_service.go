@@ -60,6 +60,7 @@ type AdminService interface {
 	CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error)
 	UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error)
 	DeleteAccount(ctx context.Context, id int64) error
+	BatchDeleteAccounts(ctx context.Context, ids []int64) (*AccountBatchDeleteResult, error)
 	RefreshAccountCredentials(ctx context.Context, id int64) (*Account, error)
 	ClearAccountError(ctx context.Context, id int64) (*Account, error)
 	SetAccountError(ctx context.Context, id int64, errorMsg string) error
@@ -317,6 +318,16 @@ type GenerateRedeemCodesInput struct {
 type ProxyBatchDeleteResult struct {
 	DeletedIDs []int64                   `json:"deleted_ids"`
 	Skipped    []ProxyBatchDeleteSkipped `json:"skipped"`
+}
+
+type AccountBatchDeleteFailed struct {
+	ID     int64  `json:"id"`
+	Reason string `json:"reason"`
+}
+
+type AccountBatchDeleteResult struct {
+	DeletedIDs []int64                    `json:"deleted_ids"`
+	Failed     []AccountBatchDeleteFailed `json:"failed"`
 }
 
 type ProxyBatchDeleteSkipped struct {
@@ -1845,6 +1856,54 @@ func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
 		return err
 	}
 	return nil
+}
+
+func (s *adminServiceImpl) BatchDeleteAccounts(ctx context.Context, ids []int64) (*AccountBatchDeleteResult, error) {
+	result := &AccountBatchDeleteResult{}
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			result.Failed = append(result.Failed, AccountBatchDeleteFailed{
+				ID:     id,
+				Reason: "invalid account id",
+			})
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+
+		exists, err := s.accountRepo.ExistsByID(ctx, id)
+		if err != nil {
+			result.Failed = append(result.Failed, AccountBatchDeleteFailed{
+				ID:     id,
+				Reason: err.Error(),
+			})
+			continue
+		}
+		if !exists {
+			result.Failed = append(result.Failed, AccountBatchDeleteFailed{
+				ID:     id,
+				Reason: ErrAccountNotFound.Error(),
+			})
+			continue
+		}
+		if err := s.accountRepo.Delete(ctx, id); err != nil {
+			result.Failed = append(result.Failed, AccountBatchDeleteFailed{
+				ID:     id,
+				Reason: err.Error(),
+			})
+			continue
+		}
+		result.DeletedIDs = append(result.DeletedIDs, id)
+	}
+
+	return result, nil
 }
 
 func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int64) (*Account, error) {

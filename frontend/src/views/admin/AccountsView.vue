@@ -114,6 +114,13 @@
               <button @click="openExportDataDialog" class="btn btn-secondary">
                 {{ selIds.length ? t('admin.accounts.dataExportSelected') : t('admin.accounts.dataExport') }}
               </button>
+              <button
+                @click="handleDeleteErroredVisible"
+                class="btn btn-danger"
+                :disabled="erroredVisibleAccountIds.length === 0"
+              >
+                {{ t('admin.accounts.bulkActions.deleteErroredVisible') }}
+              </button>
             </template>
           </AccountTableActions>
         </div>
@@ -953,7 +960,46 @@ const toggleSelectAllVisible = (event: Event) => {
   const target = event.target as HTMLInputElement
   toggleVisible(target.checked)
 }
-const handleBulkDelete = async () => { if(!confirm(t('common.confirm'))) return; try { await Promise.all(selIds.value.map(id => adminAPI.accounts.delete(id))); clearSelection(); reload() } catch (error) { console.error('Failed to bulk delete accounts:', error) } }
+const erroredVisibleAccountIds = computed(() =>
+  accounts.value
+    .filter(account => account.status === 'error' || Boolean(account.error_message))
+    .map(account => account.id)
+)
+const executeBatchDelete = async (accountIds: number[], clearAfterDelete: boolean) => {
+  if (accountIds.length === 0) return
+  try {
+    const result = await adminAPI.accounts.batchDelete(accountIds)
+    const deletedCount = Array.isArray(result.deleted_ids) ? result.deleted_ids.length : 0
+    const failedCount = Array.isArray(result.failed) ? result.failed.length : 0
+
+    if (deletedCount > 0 && clearAfterDelete) {
+      clearSelection()
+    }
+
+    if (deletedCount > 0 && failedCount === 0) {
+      appStore.showSuccess(t('admin.accounts.bulkDeleteSuccess', { count: deletedCount }))
+    } else if (deletedCount > 0) {
+      appStore.showWarning(t('admin.accounts.bulkDeletePartial', { success: deletedCount, failed: failedCount }))
+    } else {
+      appStore.showError(t('admin.accounts.bulkDeleteFailed'))
+    }
+    reload()
+  } catch (error) {
+    console.error('Failed to bulk delete accounts:', error)
+    appStore.showError(error instanceof Error ? error.message : t('admin.accounts.bulkDeleteFailed'))
+  }
+}
+const handleBulkDelete = async () => {
+  if (selIds.value.length === 0) return
+  if (!confirm(t('admin.accounts.bulkDeleteConfirm', { count: selIds.value.length }))) return
+  await executeBatchDelete(selIds.value, true)
+}
+const handleDeleteErroredVisible = async () => {
+  const accountIds = erroredVisibleAccountIds.value
+  if (accountIds.length === 0) return
+  if (!confirm(t('admin.accounts.bulkDeleteErroredVisibleConfirm', { count: accountIds.length }))) return
+  await executeBatchDelete(accountIds, false)
+}
 const handleBulkResetStatus = async () => {
   if (!confirm(t('common.confirm'))) return
   try {

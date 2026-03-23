@@ -599,6 +599,11 @@ export interface BatchOperationResult {
   warnings?: Array<{ account_id: number; warning: string }>
 }
 
+export interface BatchDeleteAccountsResult {
+  deleted_ids: number[]
+  failed: Array<{ id: number; reason: string }>
+}
+
 /**
  * Batch clear account errors
  * @param accountIds - Array of account IDs
@@ -621,6 +626,13 @@ export async function batchRefresh(accountIds: number[]): Promise<BatchOperation
     account_ids: accountIds,
   }, {
     timeout: 120000  // 120s timeout for large batch refreshes
+  })
+  return data
+}
+
+export async function batchDelete(accountIds: number[]): Promise<BatchDeleteAccountsResult> {
+  const { data } = await apiClient.post<BatchDeleteAccountsResult>('/admin/accounts/batch-delete', {
+    ids: accountIds
   })
   return data
 }
@@ -660,6 +672,7 @@ export const accountsAPI = {
   exportData,
   importData,
   getAntigravityDefaultModelMapping,
+  batchDelete,
   batchClearError,
   batchRefresh
 }

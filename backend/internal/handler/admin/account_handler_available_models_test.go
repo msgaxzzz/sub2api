@@ -167,3 +167,46 @@ func TestAccountHandlerGetAvailableModels_GeminiOAuthUsesUpstreamModels(t *testi
 	require.Equal(t, "gemini-2.5-flash", resp.Data[0].ID)
 	require.Equal(t, "gemini-2.5-flash-image", resp.Data[1].ID)
 }
+
+func TestAccountHandlerGetAvailableModels_GeminiCodeAssistUsesFallbackModels(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       45,
+			Name:     "gemini-code-assist",
+			Platform: service.PlatformGemini,
+			Type:     service.AccountTypeOAuth,
+			Status:   service.StatusActive,
+			Credentials: map[string]any{
+				"access_token": "token",
+				"project_id":   "project-1",
+			},
+		},
+	}
+	upstream := &availableModelsUpstreamStub{
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"models":[{"name":"models/gemini-2.5-flash-image","displayName":"Gemini 2.5 Flash Image"}]}`)),
+		},
+	}
+	geminiCompatSvc := service.NewGeminiMessagesCompatService(nil, nil, nil, nil, &service.GeminiTokenProvider{}, nil, upstream, nil, &config.Config{})
+	router := setupAvailableModelsRouter(svc, geminiCompatSvc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/45/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotEmpty(t, resp.Data)
+	for _, model := range resp.Data {
+		require.NotContains(t, model.ID, "image")
+	}
+}

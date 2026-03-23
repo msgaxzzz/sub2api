@@ -596,33 +596,22 @@ func (s *AccountTestService) testGeminiAccountConnection(c *gin.Context, account
 	// Create test payload (Gemini format)
 	payload := createGeminiTestPayload(testModelID, prompt)
 
-	// Build request based on account type
-	var req *http.Request
-	var err error
-
-	switch account.Type {
-	case AccountTypeAPIKey:
-		req, err = s.buildGeminiAPIKeyRequest(ctx, account, testModelID, payload)
-	case AccountTypeOAuth:
-		req, err = s.buildGeminiOAuthRequest(ctx, account, testModelID, payload)
-	default:
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account type: %s", account.Type))
-	}
-
-	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build request: %s", err.Error()))
-	}
-
 	// Send test_start event
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
-	// Get proxy and execute request
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+	if account.IsGeminiCodeAssist() {
+		modeMessage := "Gemini OAuth mode: Code Assist"
+		if isImageGenerationModel(testModelID) {
+			modeMessage += " (image generation is not exposed through this test path)"
+		}
+		s.sendEvent(c, TestEvent{Type: "content", Text: modeMessage})
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
+	if account.IsGeminiCodeAssist() && isImageGenerationModel(testModelID) {
+		return s.sendErrorAndEnd(c, "Gemini Code Assist OAuth accounts do not support native image model tests here; use an AI Studio OAuth/API key account for Gemini image models")
+	}
+
+	resp, effectiveModelID, err := s.executeGeminiTestRequest(ctx, c, account, testModelID, payload)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
@@ -634,12 +623,62 @@ func (s *AccountTestService) testGeminiAccountConnection(c *gin.Context, account
 		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
 	}
 
-	if isImageGenerationModel(testModelID) {
+	if isImageGenerationModel(effectiveModelID) {
 		return s.processGeminiResponse(c, resp.Body)
 	}
 
 	// Process SSE stream
 	return s.processGeminiStream(c, resp.Body)
+}
+
+func (s *AccountTestService) executeGeminiTestRequest(ctx context.Context, c *gin.Context, account *Account, modelID string, payload []byte) (*http.Response, string, error) {
+	resp, err := s.doGeminiTestRequest(ctx, account, modelID, payload)
+	if err != nil {
+		return nil, modelID, err
+	}
+
+	fallbackModelID, ok := geminiImagePreviewFallbackModel(modelID)
+	if !ok || resp.StatusCode != http.StatusNotFound {
+		return resp, modelID, nil
+	}
+
+	_ = resp.Body.Close()
+	s.sendEvent(c, TestEvent{
+		Type: "content",
+		Text: fmt.Sprintf("Gemini image model %s returned 404, retrying with %s", modelID, fallbackModelID),
+	})
+
+	retryResp, retryErr := s.doGeminiTestRequest(ctx, account, fallbackModelID, payload)
+	if retryErr != nil {
+		return nil, fallbackModelID, retryErr
+	}
+	return retryResp, fallbackModelID, nil
+}
+
+func (s *AccountTestService) doGeminiTestRequest(ctx context.Context, account *Account, modelID string, payload []byte) (*http.Response, error) {
+	var (
+		req *http.Request
+		err error
+	)
+
+	switch account.Type {
+	case AccountTypeAPIKey:
+		req, err = s.buildGeminiAPIKeyRequest(ctx, account, modelID, payload)
+	case AccountTypeOAuth:
+		req, err = s.buildGeminiOAuthRequest(ctx, account, modelID, payload)
+	default:
+		return nil, fmt.Errorf("unsupported account type: %s", account.Type)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to build request: %w", err)
+	}
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+
+	return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
 }
 
 type soraProbeStep struct {
@@ -1472,6 +1511,19 @@ func normalizeGeminiNativeTestModelID(modelID string) string {
 		return "gemini-3-pro-image-preview"
 	default:
 		return modelID
+	}
+}
+
+func geminiImagePreviewFallbackModel(modelID string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(modelID)) {
+	case "gemini-2.5-flash-image":
+		return "gemini-2.5-flash-image-preview", true
+	case "gemini-3.1-flash-image":
+		return "gemini-3.1-flash-image-preview", true
+	case "gemini-3-pro-image":
+		return "gemini-3-pro-image-preview", true
+	default:
+		return "", false
 	}
 }
 

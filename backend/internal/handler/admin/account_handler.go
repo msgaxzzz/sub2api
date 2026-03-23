@@ -645,6 +645,28 @@ func (h *AccountHandler) Delete(c *gin.Context) {
 	response.Success(c, gin.H{"message": "Account deleted successfully"})
 }
 
+// BatchDelete handles batch deleting accounts
+// POST /api/v1/admin/accounts/batch-delete
+func (h *AccountHandler) BatchDelete(c *gin.Context) {
+	type BatchDeleteRequest struct {
+		IDs []int64 `json:"ids" binding:"required,min=1"`
+	}
+
+	var req BatchDeleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	result, err := h.adminService.BatchDeleteAccounts(c.Request.Context(), req.IDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, result)
+}
+
 // TestAccountRequest represents the request body for testing an account
 type TestAccountRequest struct {
 	ModelID string `json:"model_id"`
@@ -1875,17 +1897,20 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 func (h *AccountHandler) listGeminiOAuthModels(ctx context.Context, account *service.Account) []geminicli.Model {
 	if account == nil || h.geminiCompatService == nil {
-		return geminicli.DefaultModels
+		return geminicli.DefaultOAuthFallbackModels
+	}
+	if account.IsGeminiCodeAssist() {
+		return geminicli.DefaultOAuthFallbackModels
 	}
 
 	res, err := h.geminiCompatService.ForwardAIStudioGET(ctx, account, "/v1beta/models")
 	if err != nil || shouldFallbackAdminGeminiModels(res) || res == nil || res.StatusCode != http.StatusOK {
-		return geminicli.DefaultModels
+		return geminicli.DefaultOAuthFallbackModels
 	}
 
 	var upstream gemini.ModelsListResponse
 	if err := json.Unmarshal(res.Body, &upstream); err != nil || len(upstream.Models) == 0 {
-		return geminicli.DefaultModels
+		return geminicli.DefaultOAuthFallbackModels
 	}
 
 	models := make([]geminicli.Model, 0, len(upstream.Models))
@@ -1906,7 +1931,7 @@ func (h *AccountHandler) listGeminiOAuthModels(ctx context.Context, account *ser
 		})
 	}
 	if len(models) == 0 {
-		return geminicli.DefaultModels
+		return geminicli.DefaultOAuthFallbackModels
 	}
 	return models
 }
