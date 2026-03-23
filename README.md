@@ -13,16 +13,7 @@
 English | [中文](README_CN.md)
 
 </div>
-
-> **Sub2API officially uses only the domains `sub2api.org` and `pincc.ai`. Other websites using the Sub2API name may be third-party deployments or services and are not affiliated with this project. Please verify and exercise your own judgment.**
-
 ---
-
-## Demo
-
-Try Sub2API online: **[https://demo.sub2api.org/](https://demo.sub2api.org/)**
-
-Demo credentials (shared demo environment; **not** created automatically for self-hosted installs):
 
 | Email | Password |
 |-------|----------|
